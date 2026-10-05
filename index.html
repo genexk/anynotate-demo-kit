@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anynotate demo kit</title>
+<meta name="description" content="Presenter guide for the Anynotate tomato soup demo: setup, five notes, recording tips, reset and troubleshooting.">
+<meta name="color-scheme" content="dark">
+<link rel="stylesheet" href="assets/guide.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b2d6e'/%3E%3Ccircle cx='16' cy='17' r='8' fill='%23ffd84a'/%3E%3C/svg%3E">
+</head>
+<body>
+<canvas class="aurora" aria-hidden="true"></canvas>
+
+<div class="wrap">
+  <header class="top">
+    <p class="eyebrow">Anynotate demo kit</p>
+    <h1>Fix a recipe page with <em>five notes</em>.</h1>
+    <p class="lede">A presenter guide for showing Anynotate live or on video. You leave notes on a small tomato soup page, send them to an AI coding agent, and the page updates in front of the audience.</p>
+  </header>
+</div>
+
+<nav class="toc" aria-label="Sections">
+  <div class="wrap">
+    <ul>
+      <li><a href="#before">Before you start</a></li>
+      <li><a href="#setup">Setup</a></li>
+      <li><a href="#agent">Pick an agent</a></li>
+      <li><a href="#steps">The five notes</a></li>
+      <li><a href="#show">Run of show</a></li>
+      <li><a href="#recording">Recording</a></li>
+      <li><a href="#reset">Reset</a></li>
+      <li><a href="#trouble">Troubleshooting</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <section id="before">
+    <h2>Before you start</h2>
+    <div class="glass">
+      <ul class="check">
+        <li>Chrome (or Edge, Brave, Chromium) with the Anynotate extension installed and pinned</li>
+        <li><code>anynotate install</code> done, and <code>anynotate doctor</code> passes</li>
+        <li><code>git</code>, plus <a href="https://bun.sh">bun</a> for live reload (python3 works, but you refresh by hand)</li>
+        <li>An agent: Claude Code, Codex, or anything that can read a file or use MCP; optionally herdr</li>
+        <li>This kit cloned somewhere, for example <code>~/anynotate-demo-kit</code></li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="setup">
+    <h2>Setup</h2>
+    <p>The setup script clones the demo site into <code>~/anynotate-demo</code> (or a folder you pass), runs <code>anynotate doctor</code> and starts the page at <a href="http://localhost:5173">http://localhost:5173</a>.</p>
+    <span class="label">macOS and Linux</span>
+<pre class="term" id="cmd-setup"><button class="copy" type="button" data-copy="cmd-setup">Copy</button>git clone https://github.com/genexk/anynotate-demo-kit.git ~/anynotate-demo-kit
+~/anynotate-demo-kit/scripts/setup.sh
+~/anynotate-demo-kit/scripts/check.sh   <span class="c"># pre-flight, changes nothing</span></pre>
+    <span class="label">Windows (PowerShell)</span>
+<pre class="term" id="cmd-setup-win"><button class="copy" type="button" data-copy="cmd-setup-win">Copy</button>git clone https://github.com/genexk/anynotate-demo-kit.git $HOME\anynotate-demo-kit
+pwsh -File $HOME\anynotate-demo-kit\scripts\setup.ps1
+pwsh -File $HOME\anynotate-demo-kit\scripts\check.ps1</pre>
+    <p class="muted">Every script takes <code>--dry-run</code> (<code>-DryRun</code> in PowerShell) and an optional demo folder. <code>ANYNOTATE_DEMO_DIR</code> and <code>ANYNOTATE_DEMO_PORT</code> change the defaults.</p>
+  </section>
+
+  <section id="agent">
+    <h2>Pick an agent</h2>
+    <p>Whichever you choose, start it <strong>in the demo folder</strong>, so it can edit the page. The demo's <code>CLAUDE.md</code> and <code>AGENTS.md</code> ask for small edits and no new dependencies.</p>
+    <div class="grid">
+      <div class="glass">
+        <h3>herdr pane</h3>
+        <p class="muted">Best for recordings: notes are typed into the pane the moment you send.</p>
+<pre class="term">cd ~/anynotate-demo
+claude      <span class="c"># or codex</span></pre>
+        <p>In the dock, pick the pane labelled <code>… · claude · anynotate-demo</code>.</p>
+      </div>
+      <div class="glass">
+        <h3>Claude Code or Codex session</h3>
+        <p class="muted">Outside herdr. The session shows with ⏳: notes arrive with your next message.</p>
+<pre class="term">cd ~/anynotate-demo
+claude</pre>
+        <p>Send from the dock, then type <code>go</code> in the session.</p>
+      </div>
+      <div class="glass">
+        <h3>Inbox, for any agent</h3>
+        <p class="muted">Pick 📥 Inbox in the dock, then ask the agent to read the notes:</p>
+        <ul>
+          <li><code>/annotations</code> in Claude Code or Codex</li>
+          <li>“Read my browser notes” over MCP (<code>anynotate mcp install</code>)</li>
+          <li>or point it at <code>~/.anynotate/inbox/latest/README.md</code></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="steps">
+    <h2>The five notes</h2>
+    <p>Each one is a small, real problem on the page: easy to miss, obvious once someone points at it. Turn notes on with <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>. To pick an element, use the crosshair or <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>.</p>
+
+    <ol class="steps">
+      <li class="glass">
+        <div class="step-head"><h3>The pale Save button</h3><span class="chip how">Element</span><span class="chip change">Request change</span></div>
+        <dl class="facts">
+          <dt>Point at</dt><dd>The orange <strong>Save recipe</strong> button at the bottom.</dd>
+          <dt>Type</dt><dd><div class="note"><q id="n1">This button is hard to read. Give it enough contrast to pass WCAG AA, and keep it orange.</q><button class="copy" type="button" data-copy="n1">Copy</button></div></dd>
+          <dt>Expect</dt><dd>The agent darkens the button colour in <code>site/style.css</code>; the button turns a deep burnt orange with readable white text.</dd>
+          <dt>Say</dt><dd class="say">“I point at the button and say what’s wrong in plain words. No selectors, no screenshots pasted into a chat.”</dd>
+        </dl>
+      </li>
+
+      <li class="glass">
+        <div class="step-head"><h3>25 or 45 minutes?</h3><span class="chip how">Text selection</span><span class="chip explain">Explain</span></div>
+        <dl class="facts">
+          <dt>Point at</dt><dd>Select <strong>about 25 minutes</strong> in the line under the picture. The badge at the top says 45 minutes.</dd>
+          <dt>Type</dt><dd><div class="note"><q id="n2">The badge at the top says 45 minutes. Which one is right? Add up the steps and make the two agree.</q><button class="copy" type="button" data-copy="n2">Copy</button></div></dd>
+          <dt>Expect</dt><dd>The agent adds up the method (10 + 25 + 10 = 45 minutes), says the badge is right, and changes the line to “about 45 minutes”.</dd>
+          <dt>Say</dt><dd class="say">“Notes aren’t only change requests. I can ask about any sentence, and the agent gets the exact words I selected.”</dd>
+        </dl>
+      </li>
+
+      <li class="glass">
+        <div class="step-head"><h3>The cramped ingredients</h3><span class="chip how">Element</span><span class="chip change">Request change</span></div>
+        <dl class="facts">
+          <dt>Point at</dt><dd>The whole <strong>Ingredients</strong> list (pick the list, not one line).</dd>
+          <dt>Type</dt><dd><div class="note"><q id="n3">These lines are cramped. Give the list more breathing room, like the method steps below.</q><button class="copy" type="button" data-copy="n3">Copy</button></div></dd>
+          <dt>Expect</dt><dd>The agent raises the line height and adds space between items in <code>site/style.css</code>.</dd>
+          <dt>Say</dt><dd class="say">“Each note carries the element, its styles and a crop, so ‘cramped’ is all I need to say.”</dd>
+        </dl>
+      </li>
+
+      <li class="glass">
+        <div class="step-head"><h3>Servings that don’t scale</h3><span class="chip how">Element</span><span class="chip change">Request change</span></div>
+        <dl class="facts">
+          <dt>Point at</dt><dd>Click <strong>6</strong> under Servings first, so the audience sees the badge change and the amounts stay put. Then pick the servings buttons.</dd>
+          <dt>Type</dt><dd><div class="note"><q id="n4">Picking 2 or 6 changes the badge, but the ingredient amounts stay the same. Make them scale.</q><button class="copy" type="button" data-copy="n4">Copy</button></div></dd>
+          <dt>Expect</dt><dd>The agent finds that <code>site/app.js</code> looks for amounts the markup never marks, and fixes it. Picking 6 now shows 1.5 kg tomatoes and 1125 ml stock.</dd>
+          <dt>Say</dt><dd class="say">“My note is about what I see. The agent goes from the button to the bug in the JavaScript.”</dd>
+        </dl>
+      </li>
+
+      <li class="glass">
+        <div class="step-head"><h3>A paler-than-ripe tomato</h3><span class="chip how">Region</span><span class="chip change">Request change</span></div>
+        <dl class="facts">
+          <dt>Point at</dt><dd>Drag a region around the <strong>big tomato</strong> in the middle of the picture.</dd>
+          <dt>Type</dt><dd><div class="note"><q id="n5">Make this tomato a deeper, riper red.</q><button class="copy" type="button" data-copy="n5">Copy</button></div></dd>
+          <dt>Expect</dt><dd>The agent changes the big tomato’s fill in the picture in <code>site/index.html</code>; the cherry tomatoes stay as they are.</dd>
+          <dt>Say</dt><dd class="say">“I can circle part of a picture, and the agent edits the right shape.”</dd>
+        </dl>
+      </li>
+    </ol>
+  </section>
+
+  <section id="show">
+    <h2>Run of show</h2>
+    <div class="grid">
+      <div class="glass">
+        <h3>Short take, about 90 seconds</h3>
+        <p>Notes 1, 4 and 5, one send. Shows an element, a bug behind the UI and a region.</p>
+      </div>
+      <div class="glass">
+        <h3>Full take, 3 to 4 minutes</h3>
+        <p>All five, then one send with an overall note:</p>
+        <div class="note"><q id="n-overall">Five small fixes on the recipe page. Keep each change minimal.</q><button class="copy" type="button" data-copy="n-overall">Copy</button></div>
+      </div>
+      <div class="glass">
+        <h3>One at a time</h3>
+        <p>Send after each note and let the page reload before the next. Slower, but each change lands on its own.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="recording">
+    <h2>Recording tips</h2>
+    <div class="glass">
+      <ul class="check">
+        <li>Browser window <strong>1280 × 800</strong>, page zoom <strong>100%</strong> (<kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>0</kbd>)</li>
+        <li>Hide the bookmarks bar (<kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>); use a clean profile with only Anynotate pinned</li>
+        <li>Agent terminal beside the browser, font size 16 or more; turn on Do Not Disturb</li>
+        <li>Run <code>check.sh</code> right before each take, and <code>reset.sh</code> right after</li>
+        <li>Type the notes yourself on camera, or paste them with the Copy buttons above if you are short on time</li>
+        <li>Pause a beat after each send: the page reloads by itself, and that moment is the demo</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="reset">
+    <h2>Reset between takes</h2>
+<pre class="term" id="cmd-reset"><button class="copy" type="button" data-copy="cmd-reset">Copy</button>~/anynotate-demo-kit/scripts/reset.sh --dry-run   <span class="c"># see what it would do</span>
+~/anynotate-demo-kit/scripts/reset.sh</pre>
+    <p>Reset only works on the demo clone: it checks for the committed <code>.anynotate-demo</code> marker and an <code>origin</code> remote named <code>anynotate-demo</code>, and stops if either is missing. Then it:</p>
+    <ol>
+      <li>stops the demo server it started (never another process on the port),</li>
+      <li>runs <code>git reset --hard origin/main</code> and <code>git clean -fd</code> in the demo clone,</li>
+      <li>starts the server again; an open page reloads itself,</li>
+      <li>removes Anynotate bundles whose page URL starts with <code>http://localhost:5173</code> from <code>~/.anynotate/inbox</code> and <code>archive</code> (or <code>$ANYNOTATE_HOME</code>). Notes from every other page stay.</li>
+    </ol>
+    <div class="glass">
+      <p><strong>One thing the scripts can’t do:</strong> saved but unsent notes live in the browser. Open Anynotate’s <strong>Options</strong> and click <strong>Clear all unsent notes</strong>, or delete the notes for this page in the dock.</p>
+    </div>
+  </section>
+
+  <section id="trouble">
+    <h2>Troubleshooting</h2>
+    <div class="glass">
+      <details>
+        <summary>The page doesn’t change after the agent edits it</summary>
+        <p>Live reload needs bun. With the python3 fallback, refresh by hand. Check <code>~/anynotate-demo/.serve.log</code> for errors.</p>
+      </details>
+      <details>
+        <summary>Port 5173 is already taken</summary>
+        <p>Set <code>ANYNOTATE_DEMO_PORT=5174</code> for setup, check and reset alike. Reset then cleans notes for <code>http://localhost:5174</code> only.</p>
+      </details>
+      <details>
+        <summary>My agent isn’t in the dock’s Sessions list</summary>
+        <p>Start it in the demo folder and press refresh in the dock. <code>anynotate status</code> lists what the bridge sees. The 📥 Inbox always works.</p>
+      </details>
+      <details>
+        <summary>The extension says it can’t reach the bridge</summary>
+        <p>Run <code>anynotate doctor</code>; re-running <code>anynotate install</code> restarts the bridge.</p>
+      </details>
+      <details>
+        <summary>Reset says the folder is not a clone of anynotate-demo</summary>
+        <p>That’s the safety check. Pass the demo folder: <code>reset.sh ~/anynotate-demo</code>.</p>
+      </details>
+      <details>
+        <summary>Old notes still show on the page after a reset</summary>
+        <p>They are unsent notes kept by the browser: Options → <strong>Clear all unsent notes</strong>.</p>
+      </details>
+      <details>
+        <summary>The agent changed more than I asked</summary>
+        <p>Reset and take it again. If it keeps happening, add the overall note “Keep each change minimal.”</p>
+      </details>
+      <details>
+        <summary>PowerShell won’t run the scripts</summary>
+        <p>Run them with <code>pwsh -ExecutionPolicy Bypass -File scripts\reset.ps1</code>.</p>
+      </details>
+    </div>
+  </section>
+
+</main>
+
+<div class="wrap">
+  <footer class="end">
+    The demo site is <a href="https://github.com/genexk/anynotate-demo">genexk/anynotate-demo</a>. Anynotate itself is at <a href="https://github.com/genexk/anynotate">genexk/anynotate</a>. MIT licensed.
+  </footer>
+</div>
+
+<script src="assets/guide.js"></script>
+</body>
+</html>
