@@ -1,0 +1,12 @@
+{
+  "name": "anynotate-demo-kit-shots",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "shots": "bun make-shots.ts"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0",
+    "sharp": "^0.34.0"
+  }
+}

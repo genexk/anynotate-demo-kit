@@ -166,3 +166,15 @@ footer.end { padding: 40px 0 56px; color: var(--faint); font-size: 14px; }
   dl.facts dd { margin-bottom: 8px; }
   .note { flex-direction: column; }
 }
+
+.shots { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; align-items: start; margin-top: 16px; }
+.shots figure { margin: 0; }
+.shots a { display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--line-strong); box-shadow: var(--drop); background: #fbfaf7; }
+.shots a:hover, .shots a:focus-visible { border-color: var(--mark); }
+.shots img { display: block; width: 100%; height: auto; }
+.shots figcaption { margin-top: 6px; color: var(--faint); font-size: 13px; font-weight: 600; }
+.shots figure + figure figcaption::before { content: "→ "; color: var(--mark); }
+
+@media (max-width: 640px) {
+  .shots { grid-template-columns: 1fr; }
+}

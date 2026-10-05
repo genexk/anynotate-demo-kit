@@ -43,6 +43,22 @@ All of them take an optional demo folder (default `~/anynotate-demo`); setup and
 
 Unsent notes live in the browser, out of reach of any script: open Anynotate's Options and click **Clear all unsent notes**.
 
+## Step screenshots
+
+The guide's "You annotate → Result" pictures in `assets/steps/` come from `scripts/shots/make-shots.ts`. It serves two copies of the demo site, loads the unpacked extension in Playwright's Chromium and makes each note for real; the Result copies get each step's expected fix applied. Nothing is written to the demo clone, `~/.anynotate` or your browser profile.
+
+```bash
+cd scripts/shots
+bun install
+ANYNOTATE_EXTENSION_DIR=/path/to/anynotate-extension/.output/chrome-mv3-e2e bun make-shots.ts
+```
+
+| Variable | Default |
+| --- | --- |
+| `ANYNOTATE_EXTENSION_DIR` | `../anynotate-extension/.output/chrome-mv3-e2e` next to this kit. Needs an e2e build (`bun run build:e2e`), which exposes the hooks the script drives |
+| `ANYNOTATE_DEMO_SITE` | `$ANYNOTATE_DEMO_DIR/site` |
+| `ANYNOTATE_BRIDGE_DIR` | unset. A checkout of the Anynotate repo; when set, a throwaway bridge with a stand-in herdr pane runs so the dock shows a session |
+
 ## License
 
 MIT
