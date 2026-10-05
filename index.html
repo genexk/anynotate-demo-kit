@@ -61,7 +61,7 @@
 <pre class="term" id="cmd-setup-win"><button class="copy" type="button" data-copy="cmd-setup-win">Copy</button>git clone https://github.com/genexk/anynotate-demo-kit.git $HOME\anynotate-demo-kit
 pwsh -File $HOME\anynotate-demo-kit\scripts\setup.ps1
 pwsh -File $HOME\anynotate-demo-kit\scripts\check.ps1</pre>
-    <p class="muted">Every script takes <code>--dry-run</code> (<code>-DryRun</code> in PowerShell) and an optional demo folder. <code>ANYNOTATE_DEMO_DIR</code> and <code>ANYNOTATE_DEMO_PORT</code> change the defaults.</p>
+    <p class="muted">Setup and reset take <code>--dry-run</code> (<code>-DryRun</code> in PowerShell); every script takes an optional demo folder. <code>ANYNOTATE_DEMO_DIR</code> and <code>ANYNOTATE_DEMO_PORT</code> change the defaults.</p>
   </section>
 
   <section id="agent">
@@ -188,7 +188,7 @@ claude</pre>
     <h2>Reset between takes</h2>
 <pre class="term" id="cmd-reset"><button class="copy" type="button" data-copy="cmd-reset">Copy</button>~/anynotate-demo-kit/scripts/reset.sh --dry-run   <span class="c"># see what it would do</span>
 ~/anynotate-demo-kit/scripts/reset.sh</pre>
-    <p>Reset only works on the demo clone: it checks for the committed <code>.anynotate-demo</code> marker and an <code>origin</code> remote named <code>anynotate-demo</code>, and stops if either is missing. Then it:</p>
+    <p>Reset only works on the demo clone: it checks for the committed <code>.anynotate-demo</code> marker and an <code>origin</code> of <code>genexk/anynotate-demo</code> (or a local <code>anynotate-demo</code> folder), and stops if either is missing. Then it:</p>
     <ol>
       <li>stops the demo server it started (never another process on the port),</li>
       <li>runs <code>git reset --hard origin/main</code> and <code>git clean -fd</code> in the demo clone,</li>

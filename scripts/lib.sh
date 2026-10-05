@@ -39,8 +39,8 @@ anynotate_home() {
   fi
 }
 
-# Succeeds only for the top of a git clone of anynotate-demo: the committed marker file
-# says so and the origin remote is named anynotate-demo.
+# Succeeds only for the top of a git clone of anynotate-demo: the committed marker file says so,
+# and origin is genexk/anynotate-demo (remote URL) or a local path whose last segment is anynotate-demo.
 is_demo_clone() {
   local dir="$1" top url marker
   [[ -d "$dir" ]] || return 1
@@ -49,12 +49,16 @@ is_demo_clone() {
   marker="$(git -C "$dir" show "HEAD:${DEMO_MARKER}" 2>/dev/null)" || return 1
   [[ "$marker" == "anynotate-demo" ]] || return 1
   url="$(git -C "$dir" remote get-url origin 2>/dev/null)" || return 1
-  [[ "$url" =~ anynotate-demo(\.git)?/?$ ]]
+  if [[ "$url" != file://* && ( "$url" == *://* || "$url" =~ ^[^/]+: ) ]]; then
+    [[ "$url" =~ (^|[/:])genexk/anynotate-demo(\.git)?/?$ ]]
+  else
+    [[ "$url" =~ (^|/)anynotate-demo(\.git)?/?$ ]]
+  fi
 }
 
 require_demo_clone() {
   local dir="$1"
-  is_demo_clone "$dir" || die "$dir is not a clone of anynotate-demo (needs the committed $DEMO_MARKER marker and an origin remote ending in anynotate-demo). Nothing was changed."
+  is_demo_clone "$dir" || die "$dir is not a clone of anynotate-demo (needs the committed $DEMO_MARKER marker and origin set to genexk/anynotate-demo or a local anynotate-demo folder). Nothing was changed."
 }
 
 server_up() {

@@ -40,8 +40,8 @@ function Get-AnynotateHome {
   Join-Path $HOME '.anynotate'
 }
 
-# True only for the top of a git clone of anynotate-demo: the committed marker file says so
-# and the origin remote is named anynotate-demo.
+# True only for the top of a git clone of anynotate-demo: the committed marker file says so,
+# and origin is genexk/anynotate-demo (remote URL) or a local path whose last segment is anynotate-demo.
 function Test-DemoClone([string]$Dir) {
   if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return $false }
   $full = (Resolve-Path -LiteralPath $Dir).ProviderPath
@@ -53,12 +53,15 @@ function Test-DemoClone([string]$Dir) {
   if ($LASTEXITCODE -ne 0 -or "$marker".Trim() -ne 'anynotate-demo') { return $false }
   $url = & git -C $full remote get-url origin 2>$null
   if ($LASTEXITCODE -ne 0) { return $false }
-  return "$url" -match 'anynotate-demo(\.git)?[\\/]?$'
+  $url = "$url".Trim()
+  $isRemote = $url -notmatch '^file://' -and ($url -match '^[a-zA-Z][a-zA-Z0-9+.-]*://' -or $url -match '^[^/\\]+@[^/\\]+:' -or $url -match '^[^/\\:]{2,}:')
+  if ($isRemote) { return $url -match '(^|[/:])genexk/anynotate-demo(\.git)?/?$' }
+  return $url -match '(^|[\\/])anynotate-demo(\.git)?[\\/]?$'
 }
 
 function Assert-DemoClone([string]$Dir) {
   if (-not (Test-DemoClone $Dir)) {
-    Fail "$Dir is not a clone of anynotate-demo (needs the committed $($script:DemoMarker) marker and an origin remote ending in anynotate-demo). Nothing was changed."
+    Fail "$Dir is not a clone of anynotate-demo (needs the committed $($script:DemoMarker) marker and origin set to genexk/anynotate-demo or a local anynotate-demo folder). Nothing was changed."
   }
 }
 
@@ -165,6 +168,12 @@ function Update-Latest([string]$Inbox, [string[]]$Removed) {
   $link = Join-Path $Inbox 'latest'
   $current = $null
   if (Test-Path -LiteralPath $idFile) { $current = (Get-Content -LiteralPath $idFile -Raw).Trim() }
+  else {
+    $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and $item.Target) {
+      $current = Split-Path -Leaf ([string]@($item.Target)[0]).TrimEnd('\', '/')
+    }
+  }
   if (-not $current -or $Removed -notcontains $current) { return }
   $newest = Get-NewestInboxBundle $Inbox
   $linkItem = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue

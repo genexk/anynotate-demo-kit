@@ -26,7 +26,7 @@ On Windows, use the `.ps1` scripts: `pwsh -File scripts\setup.ps1`.
 | `check.sh`, `check.ps1` | Pre-flight; changes nothing. Exits 1 when a required check fails |
 | `reset.sh`, `reset.ps1` | Resets the demo clone to `origin/main`, restarts the page, removes this page's notes from the Anynotate inbox |
 
-All of them take an optional demo folder (default `~/anynotate-demo`) and `--dry-run` (`-DryRun`). Environment overrides:
+All of them take an optional demo folder (default `~/anynotate-demo`); setup and reset also take `--dry-run` (`-DryRun`). Environment overrides:
 
 | Variable | Default |
 | --- | --- |
@@ -37,7 +37,7 @@ All of them take an optional demo folder (default `~/anynotate-demo`) and `--dry
 
 ## What reset touches
 
-- **The demo clone, and only the demo clone.** It must be the top of a git clone with the committed `.anynotate-demo` marker and an `origin` remote ending in `anynotate-demo`; otherwise reset stops before changing anything. Then `git reset --hard origin/main` and `git clean -fd`.
+- **The demo clone, and only the demo clone.** It must be the top of a git clone with the committed `.anynotate-demo` marker and an `origin` that is `genexk/anynotate-demo` (or a local path ending in an `anynotate-demo` folder); otherwise reset stops before changing anything. Then `git reset --hard origin/main` and `git clean -fd`.
 - **The demo server it started**, by the pid in `.serve.pid`. Another process on the port is reported, never stopped.
 - **Demo notes in the Anynotate inbox.** A bundle in `$ANYNOTATE_HOME/inbox/<id>/` or `archive/<id>/` is removed only when the `url` in its `annotations.json` is `http://localhost:5173` or starts with `http://localhost:5173/`, `?` or `#`. Bundles being delivered right now are skipped, and `inbox/latest` is repointed if it named a removed bundle. Reading the URL needs `jq` or `python3` (PowerShell reads JSON itself).
 
