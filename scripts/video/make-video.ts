@@ -26,7 +26,7 @@ const NOTE_1 = "Hard to read. Make it high-contrast, keep it orange.";
 const NOTE_2 = "Badge says 45. Which is right? Make them agree.";
 const PHRASE = "about 25 minutes";
 
-const BEATS = ["1 · Point at it", "2 · Say what you want", "3 · Send to your Claude Code session", "4 · Claude Code edits the page"];
+const BEATS = ["1 · Point at it", "2 · Say what you want", "3 · Send it to your agent", "4 · Claude Code edits the page"];
 
 function fail(message: string): never {
   throw new Error(message);
@@ -361,7 +361,7 @@ function keepSegments(m: Record<string, number>, changes: number[], end: number)
     if (last && c - last[1] < 1.5) last[1] = c;
     else clusters.push([c, c]);
   }
-  const segs: Segment[] = [[m.pageReady!, m.sendShown!], ...clusters.map(([a, b]) => [a - 0.6, b + 1.3] as Segment), [m.revealStart!, end]];
+  const segs: Segment[] = [[m.pageReady!, m.sendShown!], ...clusters.map(([a, b]) => [a - 0.4, b + 1.0] as Segment), [m.revealStart!, end]];
   const merged: Segment[] = [];
   for (const [a, b] of segs) {
     const last = merged.at(-1);
@@ -425,17 +425,32 @@ async function main() {
     const page = context.pages()[0] ?? (await context.newPage());
     await page.goto(server.url);
     const d = new Director(page);
+    const toggle = () => (worker as Worker).evaluate(() => (globalThis as unknown as { anynotateCommand(c: string): Promise<unknown> }).anynotateCommand("toggle-annotate"));
+    const target = page.locator("#target");
+    const targetReady = async () => {
+      await page.locator("#dock").waitFor({ state: "visible" });
+      await target.locator(`option[value='${INBOX_VALUE}']`).waitFor({ state: "attached", timeout: 10_000 });
+      for (let i = 0; i < 50 && (await target.inputValue()) !== INBOX_VALUE; i++) await sleep(100);
+      return (await target.inputValue()) === INBOX_VALUE;
+    };
+
+    // Off camera (trimmed): let the dock load its targets and remember the Inbox, so it is ready when shown.
+    await toggle();
+    if (!(await targetReady())) await target.selectOption(INBOX_VALUE);
+    await sleep(300);
+    await toggle();
+    await page.locator("#dock").waitFor({ state: "hidden" });
     await page.mouse.move(VIEW.width / 2, VIEW.height / 2);
     mark("pageReady");
-    await sleep(700);
+    await sleep(400);
 
     mark("beat1");
-    await d.glide(900, 330, 500);
-    await d.keycap("Alt + Shift + A", 1100);
-    await sleep(250);
-    await (worker as Worker).evaluate(() => (globalThis as unknown as { anynotateCommand(c: string): Promise<unknown> }).anynotateCommand("toggle-annotate"));
-    await page.locator("#dock").waitFor({ state: "visible" });
-    await sleep(700);
+    await d.glide(900, 330, 450);
+    await d.keycap("Alt + Shift + A", 1000);
+    await sleep(200);
+    await toggle();
+    if (!(await targetReady())) fail("the dock did not come back with the Inbox selected");
+    await sleep(500);
 
     await d.scrollToShow(".actions", 430, 900);
     await sleep(200);
@@ -455,16 +470,13 @@ async function main() {
 
     mark("beat3");
     await d.scrollToShow(".actions", 430, 800);
-    const target = page.locator("#target");
-    await target.locator(`option[value='${INBOX_VALUE}']`).waitFor({ state: "attached", timeout: 10_000 });
-    await d.clickOn(target, 500);
-    await target.selectOption(INBOX_VALUE);
-    await sleep(600);
-    await d.clickOn(page.locator("#send"), 450);
+    await d.glideTo(target, 500);
+    await sleep(400);
+    await d.clickOn(page.locator("#send"), 400);
     mark("sendClick");
     await d.glide(1000, 330, 450);
     await page.locator("#status").filter({ hasText: /queued|delivered|sent/ }).waitFor({ timeout: 15_000 });
-    await sleep(1300);
+    await sleep(900);
     mark("sendShown");
 
     const readme = path.join(home, "inbox/latest/README.md");
@@ -508,14 +520,13 @@ async function main() {
     if (!diff) fail(`the agent changed nothing, so there is no honest video to make\nlog: ${logFile}`);
 
     mark("revealStart");
-    await d.glideTo(page.locator("#save-recipe"), 600, 0.5, 1.6);
-    await sleep(1000);
-    await d.scrollTo(0, 900);
-    await sleep(200);
-    await d.glideTo(page.locator(".meta span").nth(1), 600);
-    await sleep(700);
-    await d.glideTo(page.locator(".intro"), 600, 0.75, 0.75);
-    await sleep(2000);
+    await d.glideTo(page.locator("#save-recipe"), 500, 0.5, 1.6);
+    await sleep(400);
+    await d.scrollTo(0, 800);
+    await d.glideTo(page.locator(".meta span").nth(1), 500);
+    await sleep(500);
+    await d.glideTo(page.locator(".intro"), 500, 0.75, 0.75);
+    await sleep(1700);
     mark("end");
 
     const closeAt = (Date.now() - t0) / 1000;
