@@ -59,6 +59,41 @@ ANYNOTATE_EXTENSION_DIR=/path/to/anynotate-extension/.output/chrome-mv3-e2e bun 
 | `ANYNOTATE_DEMO_SITE` | `$ANYNOTATE_DEMO_DIR/site` |
 | `ANYNOTATE_BRIDGE_DIR` | unset. A checkout of the Anynotate repo; when set, a throwaway bridge with a stand-in herdr pane runs so the dock shows a session |
 
+## Record the demo video
+
+`scripts/video/make-video.ts` records a ~30 second clip and a GIF of the whole loop: two notes on the tomato soup page, sent to the 📥 Inbox, then a real Claude Code run that edits the page while the browser watches it reload. Nothing in the edit is scripted: the script runs `claude -p` on a temporary copy of the demo, and if that run fails or changes nothing, it stops without making a video.
+
+```bash
+cd scripts/video
+bun install
+ANYNOTATE_EXTENSION_DIR=/path/to/anynotate-extension/.output/chrome-mv3-e2e \
+ANYNOTATE_BRIDGE_DIR=/path/to/anynotate \
+bun make-video.ts
+```
+
+What it does:
+
+1. Copies the demo clone to a temp folder and serves it with its own live-reload `serve.ts` on a free port.
+2. Starts a throwaway bridge with a temp `ANYNOTATE_HOME` (never `~/.anynotate`) and Playwright's Chromium with the e2e extension build, recording the page at 1280×800. A dot follows the mouse so viewers can see the pointer.
+3. Picks the Save recipe button and selects "about 25 minutes", writes a note on each, and sends both to the Inbox.
+4. Runs `claude -p "Browser notes waiting: read <temp home>/inbox/latest/README.md and act on them. Keep changes minimal."` in the temp copy with `--model sonnet --max-turns 12`, only the `Read,Edit,Glob,Grep` tools, `--add-dir <temp home>`, `--safe-mode --strict-mcp-config --no-session-persistence` (no hooks, plugins, MCP servers or your CLAUDE.md), and the demo's `CLAUDE.md` appended as the system prompt. It has three minutes.
+5. Cuts the wait for the agent down to a one-second card that says how long it really ran, adds a caption per step and writes:
+   - `anynotate-demo.mp4` (H.264, 1280 wide, kept under 20 MB)
+   - `anynotate-demo.gif` (960 wide, 14 fps, stepping down until it is under 15 MB)
+   - `anynotate-demo-agent-log.txt`: the notes the agent got, its final message and the diff it made
+
+Needs `bun`, `ffmpeg`, `ffprobe` and a logged-in `claude` on `PATH`.
+
+| Variable | Default |
+| --- | --- |
+| `ANYNOTATE_EXTENSION_DIR` | `../anynotate-extension/.output/chrome-mv3-e2e` next to this kit. Needs an e2e build (`bun run build:e2e`) |
+| `ANYNOTATE_BRIDGE_DIR` | `../anynotate` next to this kit. A checkout of the Anynotate repo with dependencies installed |
+| `ANYNOTATE_DEMO_DIR` | `~/anynotate-demo`. Copied, never written to |
+| `ANYNOTATE_VIDEO_OUT` | `~/Downloads` |
+| `ANYNOTATE_VIDEO_MODEL` | `sonnet` |
+| `ANYNOTATE_VIDEO_CLAUDE` | `claude` |
+| `ANYNOTATE_VIDEO_KEEP` | unset. `1` keeps the temp folders (raw recording, site copy, Anynotate home); they are kept anyway when a run fails |
+
 ## License
 
 MIT

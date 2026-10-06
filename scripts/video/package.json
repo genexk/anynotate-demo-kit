@@ -1,0 +1,11 @@
+{
+  "name": "anynotate-demo-kit-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "video": "bun make-video.ts"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}
