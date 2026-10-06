@@ -61,7 +61,7 @@ ANYNOTATE_EXTENSION_DIR=/path/to/anynotate-extension/.output/chrome-mv3-e2e bun 
 
 ## Record the demo video
 
-`scripts/video/make-video.ts` records a ~30 second clip and a GIF of the whole loop: two notes on the tomato soup page, sent to the 📥 Inbox, then a real Claude Code run that edits the page while the browser watches it reload. Nothing in the edit is scripted: the script runs `claude -p` on a temporary copy of the demo, and if that run fails or changes nothing, it stops without making a video.
+`scripts/video/make-video.ts` records a ~40 second side-by-side clip and a GIF of the whole loop: three notes on the tomato soup page (an element, a text selection and a dragged region over the big tomato), sent to a Claude Code session picked from the dock, then a real Claude Code run that edits the page while the browser watches it reload. Nothing in the edit is scripted: the script runs `claude -p` on a temporary copy of the demo, and if that run fails or changes nothing, it stops without making a video.
 
 ```bash
 cd scripts/video
@@ -74,13 +74,14 @@ bun make-video.ts
 What it does:
 
 1. Copies the demo clone to a temp folder and serves it with its own live-reload `serve.ts` on a free port.
-2. Starts a throwaway bridge with a temp `ANYNOTATE_HOME` (never `~/.anynotate`) and Playwright's Chromium with the e2e extension build, recording the page at 1280×800. A dot follows the mouse so viewers can see the pointer.
-3. Picks the Save recipe button and selects "about 25 minutes", writes a note on each, and sends both to the Inbox.
-4. Runs `claude -p "Browser notes waiting: read <temp home>/inbox/latest/README.md and act on them. Keep changes minimal."` in the temp copy with `--model sonnet --max-turns 12`, only the `Read,Edit,Glob,Grep` tools, `--add-dir <temp home>`, `--safe-mode --strict-mcp-config --no-session-persistence` (no hooks, plugins, MCP servers or your CLAUDE.md), and the demo's `CLAUDE.md` appended as the system prompt. It has three minutes.
-5. Cuts the wait for the agent down to a one-second card that says how long it really ran, adds a caption per step and writes:
-   - `anynotate-demo.mp4` (H.264, 1280 wide, kept under 20 MB)
-   - `anynotate-demo.gif` (960 wide, 14 fps, stepping down until it is under 15 MB)
-   - `anynotate-demo-agent-log.txt`: the notes the agent got, its final message and the diff it made
+2. Starts a throwaway bridge with a temp `ANYNOTATE_HOME` (never `~/.anynotate`) and a stand-in herdr that lists three neutral sessions (`claude · anynotate-demo`, `claude · recipes-api`, `codex · shop`), then Playwright's Chromium with the e2e extension build, recording the page at 1280×800. A dot follows the mouse so viewers can see the pointer.
+3. Picks the Save recipe button, selects "about 25 minutes" and drags a region over the big tomato, writing a note on each. It then opens the dock's target list, picks the `claude · anynotate-demo` session and presses Send. The open list is the real `<select>` shown expanded in the dock, as in the guide's target-list shot, because the browser's own popup never appears on video.
+4. Takes the exact line the bridge typed into the stand-in pane (`Browser notes waiting: read <temp home>/inbox/<id>/README.md and act on them.`) and runs it as `claude -p` in the temp copy with `--model sonnet --max-turns 16`, only the `Read,Edit,Glob,Grep` tools, `--add-dir <temp home>`, `--safe-mode --strict-mcp-config --no-session-persistence` (no hooks, plugins, MCP servers or your CLAUDE.md), the demo's `CLAUDE.md` appended as the system prompt, and `--output-format stream-json --verbose`, timestamping every event. It has four minutes.
+5. Renders the terminal pane on the right, a replay of that real run styled like Claude Code: the delivered line appears as the user turn the moment Send is pressed, then each tool call, a one-line summary of each tool result and the agent's final message, in the order and at the times the stream reported them. Nothing in it is invented. For display only, the temp Anynotate home is shown as `~/.anynotate`, the bundle folder as `…` and the temp site copy as `~/anynotate-demo`.
+6. Speeds up the agent's working time in both panes by the same factor (shown by a "sped up" badge), puts a caption per step in a bar above the video so it never covers the page, and writes:
+   - `anynotate-demo.mp4` (H.264, 1920×856: browser left, terminal right, kept under 20 MB)
+   - `anynotate-demo.gif` (1280 wide at 12 fps, stepping down until it is under 15 MB)
+   - `anynotate-demo-agent-log.txt`: the notes the agent got, its timestamped events, its final message and the diff it made
 
 Needs `bun`, `ffmpeg`, `ffprobe` and a logged-in `claude` on `PATH`.
 

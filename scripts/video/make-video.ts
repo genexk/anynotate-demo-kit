@@ -1,6 +1,6 @@
 import { chromium, type BrowserContext, type Locator, type Page, type Worker } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -13,20 +13,35 @@ const BRIDGE_REPO = process.env.ANYNOTATE_BRIDGE_DIR ?? path.resolve(KIT, "../an
 const OUT = process.env.ANYNOTATE_VIDEO_OUT ?? path.join(homedir(), "Downloads");
 const CLAUDE = process.env.ANYNOTATE_VIDEO_CLAUDE ?? "claude";
 const AGENT_MODEL = process.env.ANYNOTATE_VIDEO_MODEL ?? "sonnet";
-const AGENT_TIMEOUT_MS = 180_000;
+const AGENT_TIMEOUT_MS = 240_000;
+const AGENT_MAX_TURNS = "16";
 const KEEP = process.env.ANYNOTATE_VIDEO_KEEP === "1";
 const VIEW = { width: 1280, height: 800 };
+const TERM = { width: 640, height: 800 };
+const BAR_HEIGHT = 56;
 const FPS = 30;
-const CARD_SECONDS = 1.2;
-const PANE = { pane: "w1:p2", agent: "claude", cwd: "/home/me/anynotate-demo", title: "tomato soup" };
-const INBOX_VALUE = JSON.stringify({ agent: "claude" });
+const AGENT_ON_SCREEN_SECONDS = 5;
 const AGENT_TOOLS = "Read,Edit,Glob,Grep";
+const INBOX_VALUE = JSON.stringify({ agent: "claude" });
+
+// Stand-in herdr panes. The first is the session the notes go to; the terminal pane in the video is its replay.
+const SESSIONS = [
+  { pane: "w1:p2", agent: "claude", cwd: "/home/me/anynotate-demo", title: "tomato soup" },
+  { pane: "w1:p3", agent: "claude", cwd: "/home/me/recipes-api", title: "fix tests" },
+  { pane: "w2:p1", agent: "codex", cwd: "/home/me/shop", title: "pricing" },
+];
+const SESSION = SESSIONS[0]!;
+const SESSION_LABEL = `${SESSION.agent} · ${path.basename(SESSION.cwd)}`;
+const TERM_CWD = "~/anynotate-demo";
 
 const NOTE_1 = "Hard to read. Make it high-contrast, keep it orange.";
 const NOTE_2 = "Badge says 45. Which is right? Make them agree.";
+const NOTE_3 = "Make this tomato a deeper, riper red.";
 const PHRASE = "about 25 minutes";
+// The big tomato in the hero SVG (viewBox 680×200): circle at (320, 106), r 74, stem up to y 34.
+const TOMATO_BOX = { x1: 238, y1: 26, x2: 402, y2: 186, viewWidth: 680, viewHeight: 200 };
 
-const BEATS = ["1 · Point at it", "2 · Say what you want", "3 · Send it to your agent", "4 · Claude Code edits the page"];
+const BEATS = ["1 · Point at it", "2 · Say what you want", "3 · Drag over anything", "4 · Pick your session and send", "5 · Claude Code edits the page"];
 
 function fail(message: string): never {
   throw new Error(message);
@@ -90,14 +105,16 @@ async function serveDemo(dir: string): Promise<{ proc: ChildProcess; url: string
   fail("the demo server never answered");
 }
 
-async function startBridge(home: string, extensionId: string): Promise<{ proc: ChildProcess; url: string; token: string }> {
+async function startBridge(home: string, extensionId: string): Promise<{ proc: ChildProcess; url: string; token: string; herdrLog: string }> {
   const port = await freePort();
   const list = path.join(home, "herdr-list.json");
-  writeFileSync(list, JSON.stringify({ result: { agents: [{ agent: PANE.agent, agent_status: "idle", cwd: PANE.cwd, pane_id: PANE.pane, terminal_title_stripped: PANE.title }] } }));
+  const agents = SESSIONS.map((s) => ({ agent: s.agent, agent_status: "idle", cwd: s.cwd, pane_id: s.pane, terminal_title_stripped: s.title }));
+  writeFileSync(list, JSON.stringify({ result: { agents } }));
   const shim = path.join(home, "herdr");
   writeFileSync(shim, `#!/bin/sh\nexec bun '${path.join(BRIDGE_REPO, "test/fixtures/herdr-shim.ts")}' "$@"\n`, { mode: 0o755 });
   const empty = path.join(home, "empty");
   mkdirSync(empty);
+  const herdrLog = path.join(home, "herdr.log");
   const proc = spawn(path.join(BRIDGE_REPO, "bin/anynotate"), ["bridge"], {
     env: {
       ...process.env,
@@ -106,7 +123,7 @@ async function startBridge(home: string, extensionId: string): Promise<{ proc: C
       ANYNOTATE_ALLOWED_ORIGINS: `chrome-extension://${extensionId}`,
       ANYNOTATE_HERDR: shim,
       HERDR_SHIM_LIST: list,
-      HERDR_SHIM_LOG: path.join(home, "herdr.log"),
+      HERDR_SHIM_LOG: herdrLog,
       CLAUDE_CONFIG_DIR: empty,
       CODEX_HOME: empty,
     },
@@ -119,7 +136,7 @@ async function startBridge(home: string, extensionId: string): Promise<{ proc: C
     if (existsSync(tokenFile)) {
       const token = readFileSync(tokenFile, "utf8").trim();
       try {
-        if (token && (await fetch(`${url}/sessions`, { headers: { "X-Anynotate-Token": token } })).status === 200) return { proc, url, token };
+        if (token && (await fetch(`${url}/sessions`, { headers: { "X-Anynotate-Token": token } })).status === 200) return { proc, url, token, herdrLog };
       } catch { /* not listening yet */ }
     }
     await sleep(100);
@@ -146,6 +163,11 @@ function cursorScript() {
     const place = () => {
       dot.style.transform = `translate(${x - 10}px, ${y - 10}px) scale(${down ? 0.7 : 1})`;
     };
+    const press = (d: boolean) => {
+      down = d;
+      dot.style.background = d ? "rgba(234,88,12,.85)" : "rgba(20,20,20,.55)";
+      place();
+    };
     try {
       const saved = JSON.parse(sessionStorage.getItem(KEY) ?? "null");
       if (saved) { x = saved.x; y = saved.y; dot.style.display = "block"; place(); }
@@ -158,8 +180,10 @@ function cursorScript() {
       place();
       try { sessionStorage.setItem(KEY, JSON.stringify({ x, y })); } catch { /* no storage */ }
     }, true);
-    addEventListener("mousedown", () => { down = true; dot.style.background = "rgba(234,88,12,.85)"; place(); }, true);
-    addEventListener("mouseup", () => { down = false; dot.style.background = "rgba(20,20,20,.55)"; place(); }, true);
+    addEventListener("mousedown", () => press(true), true);
+    addEventListener("mouseup", () => press(false), true);
+    // A press the page never sees: clicking a closed <select> for real would open the OS popup, which video cannot show.
+    (window as unknown as { demoPress(d: boolean): void }).demoPress = press;
   };
   if (document.documentElement) install();
   else addEventListener("DOMContentLoaded", install);
@@ -189,6 +213,12 @@ class Director {
     await this.page.mouse.up();
   }
 
+  async fakeClick() {
+    await this.page.evaluate(() => (window as unknown as { demoPress(d: boolean): void }).demoPress(true));
+    await sleep(110);
+    await this.page.evaluate(() => (window as unknown as { demoPress(d: boolean): void }).demoPress(false));
+  }
+
   async clickOn(target: Locator, ms = 650) {
     await this.glideTo(target, ms);
     await sleep(150);
@@ -199,7 +229,7 @@ class Director {
     await this.glide(from.x, from.y, 500);
     await sleep(120);
     await this.page.mouse.down();
-    await animate(ms, (t) => this.page.mouse.move(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t));
+    await animate(ms, (t) => this.page.mouse.move(from.x + (to.x - from.x) * ease(t), from.y + (to.y - from.y) * ease(t)));
     await this.page.mouse.up();
     this.x = to.x;
     this.y = to.y;
@@ -232,11 +262,11 @@ class Director {
     }, [label, ms] as const);
   }
 
-  async type(text: string) {
+  async type(text: string, perChar = 25) {
     const start = Date.now();
     for (const [i, ch] of [...text].entries()) {
       await this.page.keyboard.type(ch);
-      await sleep(Math.max(0, start + (i + 1) * 25 - Date.now()));
+      await sleep(Math.max(0, start + (i + 1) * perChar - Date.now()));
     }
   }
 }
@@ -260,25 +290,90 @@ async function phraseBox(page: Page, selector: string, phrase: string) {
 async function writeNote(d: Director, page: Page, text: string, intent: "change" | "explain") {
   const comment = page.locator("#comment");
   await comment.waitFor({ state: "visible" });
-  await sleep(200);
-  await d.clickOn(comment, 400);
   await sleep(150);
-  await d.type(text);
+  await d.clickOn(comment, 350);
+  await sleep(120);
+  await d.type(text, 22);
+  await sleep(250);
+  await d.clickOn(page.locator(`#popover [data-intent="${intent}"]`), 400);
   await sleep(300);
-  await d.clickOn(page.locator(`#popover [data-intent="${intent}"]`), 450);
-  await sleep(350);
-  await d.clickOn(page.locator("#save"), 400);
-  await sleep(600);
+  await d.clickOn(page.locator("#save"), 350);
+  await sleep(450);
 }
 
-type AgentResult = { ok: boolean; text: string; turns?: number; seconds: number; raw: string; stderr: string };
+// Shows the target <select> as an open list inside the dock, the way the guide's target-list shot does.
+async function expandTargets(page: Page) {
+  await page.locator("#target").evaluate((el: HTMLSelectElement) => {
+    el.dataset.demoStyle = el.getAttribute("style") ?? "";
+    el.size = el.options.length + el.querySelectorAll("optgroup").length;
+    Object.assign(el.style, { backgroundImage: "none", padding: "4px", overflow: "hidden", fontSize: "12px" });
+    el.style.height = `${el.scrollHeight + 10}px`;
+    (el.nextElementSibling as HTMLElement).style.display = "none";
+  });
+}
 
-async function runAgent(siteDir: string, home: string): Promise<AgentResult> {
-  const prompt = `Browser notes waiting: read ${path.join(home, "inbox/latest/README.md")} and act on them. Keep changes minimal.`;
+async function collapseTargets(page: Page) {
+  await page.locator("#target").evaluate((el: HTMLSelectElement) => {
+    for (const o of el.options) o.removeAttribute("style");
+    el.removeAttribute("size");
+    el.setAttribute("style", el.dataset.demoStyle ?? "");
+    (el.nextElementSibling as HTMLElement).style.display = "";
+  });
+}
+
+async function optionPoint(page: Page, option: Locator) {
+  const b = await option.boundingBox();
+  if (b && b.width > 0 && b.height > 0) return { x: b.x + Math.min(b.width * 0.35, 110), y: b.y + b.height / 2 };
+  return option.evaluate((o: HTMLOptionElement) => {
+    const sel = o.closest("select")!;
+    const rows = [...sel.querySelectorAll("optgroup, option")];
+    const r = sel.getBoundingClientRect();
+    const h = (sel.clientHeight - 8) / rows.length;
+    return { x: r.left + 110, y: r.top + 4 + h * (rows.indexOf(o) + 0.5) };
+  });
+}
+
+type AgentEvent = { t: number; kind: "text" | "tool" | "result" | "done"; text: string; error?: boolean };
+type AgentResult = { ok: boolean; text: string; turns?: number; seconds: number; events: AgentEvent[]; raw: string; stderr: string };
+type Block = { type: string; text?: string; name?: string; id?: string; input?: Record<string, unknown>; tool_use_id?: string; content?: unknown; is_error?: boolean };
+
+function editCounts(oldS: string, newS: string) {
+  const a = oldS.split("\n"), b = newS.split("\n");
+  const removed = a.filter((l) => !b.includes(l)).length;
+  const added = b.filter((l) => !a.includes(l)).length;
+  return `+${added} −${removed}`;
+}
+
+function toolLine(name: string, input: Record<string, unknown>, show: (s: string) => string): string {
+  const s = (k: string) => show(String(input[k] ?? ""));
+  if (name === "Read") return `Read(${s("file_path")})`;
+  if (name === "Edit") return `Edit(${s("file_path")})`;
+  if (name === "Grep") return `Grep("${s("pattern")}"${input.path ? `, ${s("path")}` : ""})`;
+  if (name === "Glob") return `Glob("${s("pattern")}"${input.path ? `, ${s("path")}` : ""})`;
+  return `${name}(${show(JSON.stringify(input)).slice(0, 60)})`;
+}
+
+function resultLine(use: { name: string; input: Record<string, unknown> } | undefined, block: Block, show: (s: string) => string): string {
+  const parts = Array.isArray(block.content) ? (block.content as Block[]) : [{ type: "text", text: String(block.content ?? "") }];
+  const text = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
+  const first = show(text.trim().split("\n")[0] ?? "").slice(0, 80);
+  if (block.is_error) return `Error: ${first.replace(/<\/?tool_use_error>/g, "")}`;
+  if (!use) return first;
+  if (use.name === "Read") {
+    if (parts.some((p) => p.type === "image")) return "Read image";
+    return `Read ${text.replace(/\n+$/, "").split("\n").length} lines`;
+  }
+  if (use.name === "Edit") return `Updated ${show(String(use.input.file_path))} (${editCounts(String(use.input.old_string ?? ""), String(use.input.new_string ?? ""))})`;
+  if (/^(No |Found )/.test(first)) return first;
+  const n = text.trim() ? text.trim().split("\n").length : 0;
+  return use.name === "Glob" ? `Found ${n} files` : `Found ${n} lines`;
+}
+
+async function runAgent(siteDir: string, prompt: string, home: string, t0: number, show: (s: string) => string): Promise<AgentResult> {
   const args = [
     "-p", prompt,
     "--model", AGENT_MODEL,
-    "--max-turns", "12",
+    "--max-turns", AGENT_MAX_TURNS,
     "--tools", AGENT_TOOLS,
     "--allowedTools", AGENT_TOOLS,
     "--add-dir", home,
@@ -286,37 +381,68 @@ async function runAgent(siteDir: string, home: string): Promise<AgentResult> {
     "--strict-mcp-config",
     "--no-session-persistence",
     "--append-system-prompt-file", path.join(siteDir, "CLAUDE.md"),
-    "--output-format", "json",
+    "--output-format", "stream-json",
+    "--verbose",
   ];
   const started = Date.now();
+  const events: AgentEvent[] = [];
+  const uses = new Map<string, { name: string; input: Record<string, unknown> }>();
+  let result: { subtype?: string; is_error?: boolean; result?: string; num_turns?: number } | undefined;
+  const now = () => (Date.now() - t0) / 1000;
+  const onLine = (line: string) => {
+    if (!line.trim()) return;
+    let m: { type?: string; message?: { content?: Block[] } } & Record<string, unknown>;
+    try { m = JSON.parse(line); } catch { return; }
+    const t = now();
+    if (m.type === "assistant") {
+      for (const b of m.message?.content ?? []) {
+        if (b.type === "text" && b.text?.trim()) events.push({ t, kind: "text", text: show(b.text.trim()) });
+        if (b.type === "tool_use" && b.id && b.name) {
+          uses.set(b.id, { name: b.name, input: b.input ?? {} });
+          events.push({ t, kind: "tool", text: toolLine(b.name, b.input ?? {}, show) });
+        }
+      }
+    }
+    if (m.type === "user") {
+      for (const b of m.message?.content ?? []) {
+        if (b.type === "tool_result") events.push({ t, kind: "result", text: resultLine(uses.get(b.tool_use_id ?? ""), b, show), error: !!b.is_error });
+      }
+    }
+    if (m.type === "result") {
+      result = m as typeof result;
+      events.push({ t, kind: "done", text: show(String(result?.result ?? "")) });
+    }
+  };
   return new Promise((resolve) => {
     let proc: ChildProcess;
     try {
       proc = spawn(CLAUDE, args, { cwd: siteDir, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
-      resolve({ ok: false, text: `could not start ${CLAUDE}: ${err}`, seconds: 0, raw: "", stderr: "" });
+      resolve({ ok: false, text: `could not start ${CLAUDE}: ${err}`, seconds: 0, events, raw: "", stderr: "" });
       return;
     }
-    let out = "", err = "";
-    proc.stdout!.on("data", (c) => (out += c));
+    let out = "", err = "", pending = "";
+    proc.stdout!.on("data", (c) => {
+      out += c;
+      pending += c;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      lines.forEach(onLine);
+    });
     proc.stderr!.on("data", (c) => (err += c));
     const timer = setTimeout(() => proc.kill("SIGTERM"), AGENT_TIMEOUT_MS);
     proc.on("error", (e) => {
       clearTimeout(timer);
-      resolve({ ok: false, text: `could not start ${CLAUDE}: ${e.message}`, seconds: 0, raw: out, stderr: err });
+      resolve({ ok: false, text: `could not start ${CLAUDE}: ${e.message}`, seconds: 0, events, raw: out, stderr: err });
     });
     proc.on("close", (code, signal) => {
       clearTimeout(timer);
+      onLine(pending);
       const seconds = (Date.now() - started) / 1000;
-      if (signal) return resolve({ ok: false, text: `claude was stopped (${signal}) after ${seconds.toFixed(0)} s`, seconds, raw: out, stderr: err });
-      try {
-        const parsed = JSON.parse(out);
-        const result = (Array.isArray(parsed) ? parsed : [parsed]).findLast((m: { type?: string }) => m.type === "result");
-        const ok = code === 0 && result?.subtype === "success" && !result.is_error;
-        resolve({ ok, text: String(result?.result ?? result?.subtype ?? "(no result)"), turns: result?.num_turns, seconds, raw: out, stderr: err });
-      } catch {
-        resolve({ ok: false, text: `claude exited with ${code} and no JSON result`, seconds, raw: out, stderr: err });
-      }
+      if (signal) return resolve({ ok: false, text: `claude was stopped (${signal}) after ${seconds.toFixed(0)} s`, seconds, events, raw: out, stderr: err });
+      if (!result) return resolve({ ok: false, text: `claude exited with ${code} and no result event`, seconds, events, raw: out, stderr: err });
+      const ok = code === 0 && result.subtype === "success" && !result.is_error;
+      resolve({ ok, text: show(String(result.result ?? result.subtype ?? "(no result)")), turns: result.num_turns, seconds, events, raw: out, stderr: err });
     });
   });
 }
@@ -326,61 +452,231 @@ function siteDiff(siteDir: string): string {
   return r.stdout.replaceAll(path.join(DEMO, "site"), "a/site").replaceAll(path.join(siteDir, "site"), "b/site");
 }
 
-async function renderOverlays(dir: string, card: { title: string; sub: string }) {
+const FONT = `system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif`;
+const BRAND_BG = "#0d0b17";
+const TOTAL_WIDTH = VIEW.width + TERM.width;
+
+async function renderBars(dir: string, speed: number) {
   const browser = await chromium.launch({ channel: "chromium" });
-  const page = await browser.newPage({ viewport: VIEW, deviceScaleFactor: 1 });
-  const font = `system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif`;
-  const files: string[] = [];
+  const shoot = async (html: string, file: string, transparent = false) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const page = await browser.newPage({ viewport: { width: TOTAL_WIDTH, height: BAR_HEIGHT }, deviceScaleFactor: 1 });
+      try {
+        await page.setContent(html);
+        await page.screenshot({ path: file, omitBackground: transparent, timeout: 10_000 });
+        return file;
+      } catch (err) {
+        if (attempt === 2) throw err;
+      } finally {
+        await page.close();
+      }
+    }
+    return file;
+  };
+  const right = `<div style="position:absolute;left:${VIEW.width}px;width:${TERM.width}px;top:0;height:${BAR_HEIGHT}px;display:flex;align-items:center;justify-content:center;color:#8f88b3;font:500 15px/1 ${FONT}">Claude Code session · replay of the real run</div>`;
+  const bar = (inner: string) => `<html><body style="margin:0;width:${TOTAL_WIDTH}px;height:${BAR_HEIGHT}px;background:${BRAND_BG};position:relative;overflow:hidden">${inner}${right}</body></html>`;
+  const base = await shoot(bar(""), path.join(dir, "bar-0.png"));
+  const captions: string[] = [];
   for (const [i, beat] of BEATS.entries()) {
     const [num, label] = beat.split(" · ");
-    await page.setContent(`<html><body style="margin:0;background:transparent">
-      <div style="position:absolute;left:32px;bottom:30px;display:flex;align-items:center;gap:12px;padding:12px 22px 12px 14px;border-radius:14px;background:rgba(17,17,17,.84);color:#fff;font:600 24px/1.1 ${font};box-shadow:0 8px 28px rgba(0,0,0,.28)">
-        <span style="display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#ea580c;font-size:19px">${num}</span>${label}
-      </div></body></html>`);
-    const file = path.join(dir, `caption-${i + 1}.png`);
-    await page.screenshot({ path: file, omitBackground: true });
-    files.push(file);
+    captions.push(await shoot(bar(`<div style="position:absolute;left:20px;top:9px;display:flex;align-items:center;gap:12px;padding:0 20px 0 8px;height:38px;border-radius:19px;background:#221d38;color:#fff;font:600 20px/1 ${FONT}">
+      <span style="display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#ea580c;font-size:16px">${num}</span>${label}</div>`), path.join(dir, `bar-${i + 1}.png`)));
   }
-  await page.setContent(`<html><body style="margin:0;height:100vh;display:grid;place-items:center;background:#16181d;color:#fff;font-family:${font}">
-    <div style="text-align:center">
-      <div style="font:700 44px/1.2 ${font};letter-spacing:-.01em">${card.title}</div>
-      <div style="margin-top:18px;font:500 22px/1.4 ${font};color:#c9ced8">${card.sub}</div>
-    </div></body></html>`);
-  const cardFile = path.join(dir, "card.png");
-  await page.screenshot({ path: cardFile });
+  const badge = await shoot(`<html><body style="margin:0;background:transparent;width:${TOTAL_WIDTH}px;height:${BAR_HEIGHT}px;position:relative">
+    <div style="position:absolute;right:${TERM.width + 20}px;top:11px;height:34px;display:flex;align-items:center;gap:8px;padding:0 14px;border-radius:17px;background:#ea580c;color:#fff;font:700 17px/1 ${FONT}">⏩ sped up ${speed.toFixed(1).replace(/\.0$/, "")}×</div></body></html>`, path.join(dir, "badge.png"), true);
   await browser.close();
-  return { captions: files, card: cardFile };
+  return { base, captions, badge };
 }
 
-type Segment = [number, number];
+type Segment = { a: number; b: number; speed: number };
 
-function keepSegments(m: Record<string, number>, changes: number[], end: number): Segment[] {
-  const clusters: Segment[] = [];
-  for (const c of changes) {
-    const last = clusters.at(-1);
-    if (last && c - last[1] < 1.5) last[1] = c;
-    else clusters.push([c, c]);
-  }
-  const segs: Segment[] = [[m.pageReady!, m.sendShown!], ...clusters.map(([a, b]) => [a - 0.4, b + 1.0] as Segment), [m.revealStart!, end]];
-  const merged: Segment[] = [];
-  for (const [a, b] of segs) {
-    const last = merged.at(-1);
-    const start = Math.max(a, last ? last[1] : a);
-    if (b <= start) continue;
-    if (last && start - last[1] < 0.3) last[1] = b;
-    else merged.push([start, b]);
-  }
-  return merged;
-}
-
-function mapTime(t: number, segs: Segment[], cardAfterFirst: number): number {
+function mapTime(t: number, segs: Segment[]): number {
   let out = 0;
-  for (const [i, [a, b]] of segs.entries()) {
-    if (t <= b) return out + Math.max(0, t - a);
-    out += b - a;
-    if (i === 0) out += cardAfterFirst;
+  for (const { a, b, speed } of segs) {
+    if (t <= b) return out + Math.max(0, t - a) / speed;
+    out += (b - a) / speed;
   }
   return out;
+}
+
+type TermItem = { at: number; dur: number; kind: "user" | "text" | "tool" | "result" | "done"; text: string; error?: boolean };
+type TermScript = {
+  prompt: string; typeAt: number; typeDur: number; submitAt: number; doneAt: number; agentStart: number;
+  items: TermItem[]; segs: Segment[]; model: string; tools: string; title: string; cwd: string;
+};
+
+// Lays the real agent events onto the output timeline: each appears when it happened (after the cut), and text streams
+// in at a reading pace without ever starting before the previous item finished.
+function termTimeline(events: AgentEvent[], m: Record<string, number>, segs: Segment[], prompt: string, turns: number | undefined, seconds: number): TermScript {
+  const typeAt = mapTime(m.sendClick!, segs);
+  const typeDur = 0.4;
+  const submitAt = typeAt + typeDur + 0.15;
+  const items: TermItem[] = [{ at: submitAt, dur: 0, kind: "user", text: prompt }];
+  let cursor = submitAt + 0.1;
+  const lastText = events.findLast((e) => e.kind === "text");
+  const done = events.find((e) => e.kind === "done");
+  for (const e of events) {
+    let at = Math.max(mapTime(e.t, segs), cursor);
+    if (e.kind === "done") {
+      if (done && lastText && done.text.trim() !== lastText.text.trim()) {
+        const dur = Math.min(1.8, Math.max(0.4, done.text.length / 260));
+        items.push({ at, dur, kind: "text", text: done.text });
+        at += dur + 0.1;
+      }
+      items.push({ at, dur: 0, kind: "done", text: `Worked for ${seconds.toFixed(1)}s${turns ? ` · ${turns} turns` : ""}` });
+      cursor = at;
+      continue;
+    }
+    const final = e === lastText;
+    const dur = e.kind === "text" ? Math.min(final ? 1.8 : 0.9, Math.max(final ? 0.4 : 0.15, e.text.length / (final ? 260 : 220))) : 0;
+    items.push({ at, dur, kind: e.kind, text: e.text, error: e.error });
+    cursor = at + dur + 0.08;
+  }
+  const doneAt = items.findLast((i) => i.kind === "done")?.at ?? cursor;
+  return {
+    prompt, typeAt, typeDur, submitAt, doneAt, agentStart: m.agentStart!, items, segs,
+    model: AGENT_MODEL, tools: AGENT_TOOLS.split(",").join(", "), title: SESSION_LABEL, cwd: TERM_CWD,
+  };
+}
+
+const TERM_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+:root { --bg: ${BRAND_BG}; --fg: #e6e3f2; --dim: #8f88b3; --line: #2b2547; --accent: #d97757; --green: #4ade80; --red: #f87171; --code: #c4b5fd; }
+* { box-sizing: border-box; }
+html, body { margin: 0; width: ${TERM.width}px; height: ${TERM.height}px; background: var(--bg); color: var(--fg); overflow: hidden; }
+body { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; flex-direction: column; border-left: 1px solid #000; }
+.titlebar { flex: none; height: 34px; display: flex; align-items: center; padding: 0 12px; background: #17142a; border-bottom: 1px solid var(--line); font: 600 13px/1 ${FONT}; color: #cfcae6; position: relative; }
+.lights { display: flex; gap: 7px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.titlebar .name { position: absolute; left: 0; right: 0; text-align: center; pointer-events: none; }
+.titlebar .cwd { margin-left: auto; color: var(--dim); font: 12px/1 ui-monospace, Menlo, monospace; }
+.screen { flex: 1; display: flex; flex-direction: column; padding: 12px 16px 10px; min-height: 0; }
+.log { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
+.welcome { border: 1px solid var(--accent); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
+.welcome b { color: var(--accent); }
+.welcome .d { color: var(--dim); }
+.row { display: flex; gap: 8px; margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
+.row .m { flex: none; width: 12px; }
+.row .x { flex: 1; min-width: 0; }
+.user { color: #b9b4cf; background: #1a1630; border-radius: 4px; padding: 4px 8px 4px 0; }
+.user .m { padding-left: 6px; width: 20px; color: var(--dim); }
+.tool .m { color: var(--green); }
+.tool .x b { font-weight: 700; }
+.res { margin-top: -6px; color: var(--dim); }
+.res .m { width: 24px; text-align: right; }
+.res.err { color: var(--red); }
+.done { margin-top: 4px; color: var(--accent); }
+.text .m { color: var(--fg); }
+code { color: var(--code); }
+.status { flex: none; height: 22px; color: var(--accent); margin: 4px 0 2px; white-space: pre; }
+.status .d { color: var(--dim); }
+.input { flex: none; border: 1px solid #4b4570; border-radius: 6px; padding: 7px 10px; min-height: 36px; white-space: pre-wrap; word-break: break-word; }
+.input .p { color: var(--dim); }
+.caret { display: inline-block; width: 8px; height: 15px; vertical-align: -3px; background: var(--fg); }
+.foot { flex: none; color: var(--dim); font-size: 11.5px; padding: 6px 2px 0; display: flex; justify-content: space-between; }
+</style></head><body>
+<div class="titlebar"><span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span><span class="name" id="title"></span><span class="cwd" id="cwd"></span></div>
+<div class="screen">
+  <div class="log" id="log"></div>
+  <div class="status" id="status"></div>
+  <div class="input" id="input"></div>
+  <div class="foot"><span id="foot-l"></span></div>
+</div>
+<script>
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const md = (s) => esc(s).replace(/\\*\\*([^*]+)\\*\\*/g, "<b>$1</b>").replace(/\`([^\`]+)\`/g, "<code>$1</code>");
+const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+let S;
+window.setup = (script) => {
+  S = script;
+  document.getElementById("title").textContent = S.title;
+  document.getElementById("cwd").textContent = S.cwd;
+  document.getElementById("foot-l").textContent = S.model + " · tools: " + S.tools;
+};
+const unmap = (tau) => {
+  let out = 0;
+  for (const g of S.segs) { const len = (g.b - g.a) / g.speed; if (tau <= out + len) return g.a + (tau - out) * g.speed; out += len; }
+  return S.segs[S.segs.length - 1].b;
+};
+window.renderAt = (t) => {
+  const parts = ['<div class="welcome"><b>✻</b> Welcome to <b>Claude Code</b><br><span class="d">  cwd: ' + esc(S.cwd) + '</span></div>'];
+  for (const it of S.items) {
+    if (it.at > t) break;
+    const n = it.dur > 0 ? Math.min(it.text.length, Math.ceil(it.text.length * (t - it.at) / it.dur)) : it.text.length;
+    const txt = it.text.slice(0, n);
+    if (it.kind === "user") parts.push('<div class="row user"><span class="m">&gt;</span><span class="x">' + esc(txt) + '</span></div>');
+    if (it.kind === "text") parts.push('<div class="row text"><span class="m">⏺</span><span class="x">' + md(txt) + '</span></div>');
+    if (it.kind === "tool") { const i = txt.indexOf("("); parts.push('<div class="row tool"><span class="m">⏺</span><span class="x"><b>' + esc(txt.slice(0, i)) + '</b>' + esc(txt.slice(i)) + '</span></div>'); }
+    if (it.kind === "result") parts.push('<div class="row res' + (it.error ? " err" : "") + '"><span class="m">⎿</span><span class="x">' + esc(txt) + '</span></div>');
+    if (it.kind === "done") parts.push('<div class="row done"><span class="m">✻</span><span class="x">' + esc(txt) + '</span></div>');
+  }
+  const log = parts.join("");
+  let status = "";
+  if (t >= S.submitAt && t < S.doneAt) {
+    const secs = Math.max(0, Math.floor(unmap(t) - S.agentStart));
+    status = SPIN[Math.floor(t * 8) % SPIN.length] + ' Working… <span class="d">(' + secs + 's · esc to interrupt)</span>';
+  }
+  let input = "";
+  const typing = t >= S.typeAt && t < S.submitAt;
+  if (typing) input = esc(S.prompt.slice(0, Math.ceil(S.prompt.length * Math.min(1, (t - S.typeAt) / S.typeDur))));
+  const caret = typing || Math.floor(t * 1.6) % 2 === 0 ? '<span class="caret"></span>' : '<span class="caret" style="opacity:0"></span>';
+  const inputHtml = '<span class="p">&gt; </span>' + input + caret;
+  const key = log + "|" + status + "|" + inputHtml;
+  if (key !== window.lastKey) {
+    document.getElementById("log").innerHTML = log;
+    document.getElementById("status").innerHTML = status;
+    document.getElementById("input").innerHTML = inputHtml;
+    window.lastKey = key;
+  }
+  return key;
+};
+</script></body></html>`;
+
+async function renderTerminal(dir: string, script: TermScript, total: number): Promise<string> {
+  const framesDir = path.join(dir, "term");
+  mkdirSync(framesDir);
+  const browser = await chromium.launch({ channel: "chromium" });
+  const page = await browser.newPage({ viewport: TERM, deviceScaleFactor: 1 });
+  await page.setContent(TERM_HTML);
+  await page.evaluate((s) => (window as unknown as { setup(s: unknown): void }).setup(s), script);
+  const frames: { file: string; from: number }[] = [];
+  let last = "";
+  const count = Math.ceil(total * FPS);
+  for (let k = 0; k < count; k++) {
+    const tau = k / FPS;
+    const key = await page.evaluate((t) => (window as unknown as { renderAt(t: number): string }).renderAt(t), tau);
+    if (key === last) continue;
+    last = key;
+    const file = path.join(framesDir, `f${String(frames.length).padStart(5, "0")}.png`);
+    await page.screenshot({ path: file });
+    frames.push({ file, from: tau });
+  }
+  await browser.close();
+  const list = frames.map((f, i) => `file '${f.file}'\nduration ${((frames[i + 1]?.from ?? total) - f.from).toFixed(4)}`).join("\n");
+  const listFile = path.join(dir, "term.txt");
+  writeFileSync(listFile, `ffconcat version 1.0\n${list}\nfile '${frames.at(-1)!.file}'\n`);
+  const out = path.join(dir, "term.mp4");
+  ffmpeg(["-f", "concat", "-safe", "0", "-i", listFile, "-vf", `fps=${FPS},format=yuv420p`, "-t", total.toFixed(3), "-c:v", "libx264", "-crf", "12", "-preset", "veryfast", out]);
+  return out;
+}
+
+function pathScrubber(siteDir: string, home: string, bundleDir: string) {
+  const variants = (p: string) => {
+    const all = new Set([p]);
+    try { all.add(realpathSync(p)); } catch { /* gone */ }
+    for (const v of [...all]) if (v.startsWith("/private/")) all.add(v.slice("/private".length));
+    return [...all].sort((a, b) => b.length - a.length);
+  };
+  const pairs: [string, string][] = [
+    ...variants(bundleDir).map((v) => [v, "~/.anynotate/inbox/…"] as [string, string]),
+    ...variants(home).map((v) => [v, "~/.anynotate"] as [string, string]),
+    ...variants(siteDir).flatMap((v) => [[`${v}/`, ""], [v, TERM_CWD]] as [string, string][]),
+  ];
+  const userHome = homedir();
+  return (s: string) => {
+    let out = s;
+    for (const [from, to] of pairs) out = out.replaceAll(from, to);
+    return out.replace(/\/(private\/)?var\/folders\/[^\s)"'`]*/g, "…").replaceAll(userHome, "~");
+  };
 }
 
 async function main() {
@@ -433,78 +729,117 @@ async function main() {
       for (let i = 0; i < 50 && (await target.inputValue()) !== INBOX_VALUE; i++) await sleep(100);
       return (await target.inputValue()) === INBOX_VALUE;
     };
+    const sessionOption = target.locator('optgroup[label="Sessions"] option', { hasText: `${SESSION_LABEL} · ` });
 
-    // Off camera (trimmed): let the dock load its targets and remember the Inbox, so it is ready when shown.
+    // Off camera (trimmed): let the dock load its targets and start on the Inbox, so the session pick is a real change.
     await toggle();
     if (!(await targetReady())) await target.selectOption(INBOX_VALUE);
+    await sessionOption.waitFor({ state: "attached", timeout: 10_000 });
     await sleep(300);
     await toggle();
     await page.locator("#dock").waitFor({ state: "hidden" });
     await page.mouse.move(VIEW.width / 2, VIEW.height / 2);
     mark("pageReady");
-    await sleep(400);
+    await sleep(300);
 
     mark("beat1");
     await d.glide(900, 330, 450);
-    await d.keycap("Alt + Shift + A", 1000);
-    await sleep(200);
+    await d.keycap("Alt + Shift + A", 900);
+    await sleep(150);
     await toggle();
     if (!(await targetReady())) fail("the dock did not come back with the Inbox selected");
-    await sleep(500);
+    await sleep(400);
 
-    await d.scrollToShow(".actions", 430, 900);
-    await sleep(200);
-    await d.clickOn(page.locator("#pick"), 550);
-    await sleep(200);
-    await d.glideTo(page.locator("#save-recipe"), 750);
-    await sleep(550);
+    await d.scrollToShow(".actions", 430, 800);
+    await sleep(150);
+    await d.clickOn(page.locator("#pick"), 500);
+    await sleep(150);
+    await d.glideTo(page.locator("#save-recipe"), 700);
+    await sleep(450);
     await d.click();
     mark("beat2");
     await writeNote(d, page, NOTE_1, "change");
 
-    await d.scrollToShow(".intro", 260, 900);
-    await sleep(250);
+    await d.scrollToShow(".intro", 260, 800);
+    await sleep(200);
     const p = await phraseBox(page, ".intro", PHRASE);
-    await d.drag(p.from, p.to, 700);
+    await d.drag(p.from, p.to, 650);
     await writeNote(d, page, NOTE_2, "explain");
 
     mark("beat3");
-    await d.scrollToShow(".actions", 430, 800);
-    await d.glideTo(target, 500);
-    await sleep(400);
-    await d.clickOn(page.locator("#send"), 400);
+    await d.scrollToShow("#hero", 110, 600);
+    await sleep(150);
+    await d.clickOn(page.locator("#pick"), 500);
+    await sleep(200);
+    const hero = (await page.locator("#hero").boundingBox())!;
+    const sx = hero.width / TOMATO_BOX.viewWidth, sy = hero.height / TOMATO_BOX.viewHeight;
+    await d.drag(
+      { x: hero.x + TOMATO_BOX.x1 * sx, y: hero.y + TOMATO_BOX.y1 * sy },
+      { x: hero.x + TOMATO_BOX.x2 * sx, y: hero.y + TOMATO_BOX.y2 * sy },
+      900,
+    );
+    await writeNote(d, page, NOTE_3, "change");
+    const regionRow = await page.locator("#notes li .q").last().textContent();
+    if (!regionRow?.startsWith("Region ")) fail(`the third note is not a region note (dock says: ${regionRow})`);
+
+    mark("beat4");
+    await d.glideTo(target, 550);
+    await sleep(150);
+    await d.fakeClick();
+    await expandTargets(page);
+    await sleep(700);
+    const to = await optionPoint(page, sessionOption);
+    await d.glide(to.x, to.y, 550);
+    await sessionOption.evaluate((o: HTMLOptionElement) => Object.assign(o.style, { background: "#2c58c9", color: "#fff" }));
+    await sleep(350);
+    await d.click();
+    await sleep(250);
+    await collapseTargets(page);
+    await page.locator("#target-hint").filter({ hasText: "Typed into the pane now." }).waitFor({ timeout: 5000 });
+    await sleep(700);
+    await d.clickOn(page.locator("#send"), 450);
     mark("sendClick");
-    await d.glide(1000, 330, 450);
-    await page.locator("#status").filter({ hasText: /queued|delivered|sent/ }).waitFor({ timeout: 15_000 });
-    await sleep(900);
+
+    let delivered = "";
+    for (let i = 0; i < 150 && !delivered; i++) {
+      const log = existsSync(b.herdrLog) ? readFileSync(b.herdrLog, "utf8") : "";
+      delivered = log.match(new RegExp(`agent prompt ${SESSION.pane} (Browser notes waiting: .+? and act on them\\.)`))?.[1] ?? "";
+      if (!delivered) await sleep(100);
+    }
+    if (!delivered) fail("the bridge never typed the notes into the stand-in pane");
+    const readme = delivered.match(/read (.+README\.md) and act/)?.[1] ?? fail(`no README path in: ${delivered}`);
+    if (!existsSync(readme)) fail(`the delivered README does not exist: ${readme}`);
+    const show = pathScrubber(siteDir, home, path.dirname(readme));
+    await d.glide(1000, 300, 400);
+    await page.locator("#status").filter({ hasText: /\S/ }).waitFor({ timeout: 15_000 });
+    await sleep(500);
     mark("sendShown");
-
-    const readme = path.join(home, "inbox/latest/README.md");
-    for (let i = 0; i < 100 && !existsSync(readme); i++) await sleep(100);
-    if (!existsSync(readme)) fail("the bridge never wrote inbox/latest/README.md");
-
-    await d.glide(1180, 120, 400);
 
     const changes: number[] = [];
     const watcher = watch(path.join(siteDir, "site"), { recursive: true }, () => changes.push((Date.now() - t0) / 1000));
     mark("agentStart");
     console.log("running claude -p on the temp copy…");
-    const agent = await runAgent(siteDir, home);
+    const agent = await runAgent(siteDir, delivered, home, t0, show);
     mark("agentEnd");
-    await sleep(1500);
+    await sleep(1000);
     watcher.close();
     const diff = siteDiff(siteDir);
 
+    const eventLog = agent.events.map((e) => `${(e.t - marks.agentStart!).toFixed(1).padStart(6)} s  ${e.kind.padEnd(6)}  ${e.text.replace(/\n/g, "\n" + " ".repeat(18))}`);
     const log = [
       "Anynotate demo video: the agent run behind the edit",
       "",
-      `Command: claude -p --model ${AGENT_MODEL} --max-turns 12 --tools ${AGENT_TOOLS} --allowedTools ${AGENT_TOOLS} --add-dir <temp ANYNOTATE_HOME> --safe-mode --strict-mcp-config --no-session-persistence --append-system-prompt-file <demo>/CLAUDE.md`,
-      `Prompt: Browser notes waiting: read <temp ANYNOTATE_HOME>/inbox/latest/README.md and act on them. Keep changes minimal.`,
+      `Command: claude -p --model ${AGENT_MODEL} --max-turns ${AGENT_MAX_TURNS} --tools ${AGENT_TOOLS} --allowedTools ${AGENT_TOOLS} --add-dir <temp ANYNOTATE_HOME> --safe-mode --strict-mcp-config --no-session-persistence --append-system-prompt-file <demo>/CLAUDE.md --output-format stream-json --verbose`,
+      `Prompt (as the bridge typed it into the pane; temp paths shortened): ${show(delivered)}`,
       `Result: ${agent.ok ? "success" : "FAILED"} · ${agent.seconds.toFixed(1)} s${agent.turns ? ` · ${agent.turns} turns` : ""}`,
       "",
-      "## The notes the agent received (inbox/latest/README.md)",
+      "## The notes the agent received (README.md)",
       "",
-      readFileSync(readme, "utf8").replaceAll(home, "<temp ANYNOTATE_HOME>"),
+      show(readFileSync(readme, "utf8")),
+      "## Agent events (stream-json, seconds after start; what the terminal pane replays)",
+      "",
+      ...eventLog,
+      "",
       "## Agent's final message",
       "",
       agent.text,
@@ -512,7 +847,7 @@ async function main() {
       "## Diff it made to the demo site",
       "",
       diff || "(no changes)",
-      ...(agent.ok ? [] : ["", "## stderr", "", agent.stderr]),
+      ...(agent.ok ? [] : ["", "## stderr", "", show(agent.stderr)]),
     ].join("\n");
     const logFile = path.join(OUT, "anynotate-demo-agent-log.txt");
     writeFileSync(logFile, log);
@@ -520,13 +855,16 @@ async function main() {
     if (!diff) fail(`the agent changed nothing, so there is no honest video to make\nlog: ${logFile}`);
 
     mark("revealStart");
-    await d.glideTo(page.locator("#save-recipe"), 500, 0.5, 1.6);
-    await sleep(400);
-    await d.scrollTo(0, 800);
-    await d.glideTo(page.locator(".meta span").nth(1), 500);
-    await sleep(500);
-    await d.glideTo(page.locator(".intro"), 500, 0.75, 0.75);
-    await sleep(1700);
+    await d.scrollToShow("#hero", 110, 500);
+    await d.glideTo(page.locator("#hero"), 500, 0.47, 0.5);
+    await sleep(700);
+    await d.glideTo(page.locator(".meta span").nth(1), 450);
+    await sleep(350);
+    await d.glideTo(page.locator(".intro"), 450, 0.75, 0.75);
+    await sleep(700);
+    await d.scrollToShow(".actions", 430, 600);
+    await d.glideTo(page.locator("#save-recipe"), 450, 0.5, 1.6);
+    await sleep(1500);
     mark("end");
 
     const closeAt = (Date.now() - t0) / 1000;
@@ -540,63 +878,80 @@ async function main() {
     const shift = duration(cfr) - closeAt;
     const at = (name: string) => marks[name]! + shift;
     const shifted = Object.fromEntries(Object.keys(marks).map((k) => [k, at(k)]));
-    const segs = keepSegments(shifted, changes.map((c) => c + shift), at("end"));
 
-    const overlays = await renderOverlays(work, {
-      title: "Claude Code is working…",
-      sub: `headless claude -p read the notes and edited the page · agent ran ~${Math.round(agent.seconds)} s, shortened here`,
-    });
+    const agentSpan = at("agentEnd") - at("agentStart");
+    const speed = Math.max(1, agentSpan / AGENT_ON_SCREEN_SECONDS);
+    const segs: Segment[] = [
+      { a: at("pageReady"), b: at("agentStart"), speed: 1 },
+      { a: at("agentStart"), b: at("agentEnd"), speed },
+      { a: at("agentEnd"), b: at("end"), speed: 1 },
+    ];
 
     const edited = path.join(work, "edited.mp4");
-    const n = segs.length;
-    const parts = segs.map(([a, b2], i) => `[r${i}]trim=start=${a.toFixed(3)}:end=${b2.toFixed(3)},setpts=PTS-STARTPTS[s${i}]`);
-    const order = segs.map((_, i) => (i === 0 ? `[s0][card]` : `[s${i}]`)).join("");
+    const parts = segs.map(({ a, b: e, speed: s }, i) => `[r${i}]trim=start=${a.toFixed(3)}:end=${e.toFixed(3)},setpts=(PTS-STARTPTS)/${s.toFixed(4)}[s${i}]`);
     const graph = [
-      `[0:v]split=${n}${segs.map((_, i) => `[r${i}]`).join("")}`,
+      `[0:v]split=${segs.length}${segs.map((_, i) => `[r${i}]`).join("")}`,
       ...parts,
-      `[1:v]scale=${VIEW.width}:${VIEW.height},fps=${FPS},setsar=1,format=yuv420p,trim=duration=${CARD_SECONDS},setpts=PTS-STARTPTS,fade=in:st=0:d=0.15,fade=out:st=${CARD_SECONDS - 0.15}:d=0.15[card]`,
-      `${order}concat=n=${n + 1}:v=1:a=0[v]`,
+      `${segs.map((_, i) => `[s${i}]`).join("")}concat=n=${segs.length}:v=1:a=0,fps=${FPS}[v]`,
     ].join(";");
-    ffmpeg(["-i", cfr, "-loop", "1", "-framerate", String(FPS), "-t", String(CARD_SECONDS), "-i", overlays.card, "-filter_complex", graph, "-map", "[v]", "-c:v", "libx264", "-crf", "12", "-preset", "veryfast", edited]);
-
+    ffmpeg(["-i", cfr, "-filter_complex", graph, "-map", "[v]", "-c:v", "libx264", "-crf", "12", "-preset", "veryfast", edited]);
     const total = duration(edited);
-    const cardStart = mapTime(segs[0]![1], segs, 0);
-    const windows: Segment[] = [
-      [mapTime(at("beat1"), segs, CARD_SECONDS), mapTime(at("beat2"), segs, CARD_SECONDS)],
-      [mapTime(at("beat2"), segs, CARD_SECONDS), mapTime(at("beat3"), segs, CARD_SECONDS)],
-      [mapTime(at("beat3"), segs, CARD_SECONDS), cardStart],
-      [cardStart + CARD_SECONDS, total],
+
+    const events = agent.events.map((e) => ({ ...e, t: e.t + shift }));
+    const script = termTimeline(events, shifted, segs, show(delivered), agent.turns, agent.seconds);
+    const term = await renderTerminal(work, script, total);
+
+    const bars = await renderBars(work, speed);
+    const o = (name: string) => mapTime(at(name), segs);
+    const windows: [number, number][] = [
+      [o("beat1"), o("beat2")],
+      [o("beat2"), o("beat3")],
+      [o("beat3"), o("beat4")],
+      [o("beat4"), o("agentStart")],
+      [o("agentStart"), total + 1],
     ];
+    const badge: [number, number] | undefined = speed > 1.05 ? [o("agentStart"), o("agentEnd")] : undefined;
+
     const mp4 = path.join(OUT, "anynotate-demo.mp4");
-    const capInputs = overlays.captions.flatMap((f) => ["-loop", "1", "-t", total.toFixed(3), "-i", f]);
-    let chain = "[0:v]";
-    const capGraph = windows.map(([a, b2], i) => {
-      const outLabel = i === windows.length - 1 ? "[v]" : `[o${i}]`;
-      const step = `${chain}[${i + 1}:v]overlay=0:0:shortest=1:enable='between(t,${a.toFixed(3)},${b2.toFixed(3)})'${outLabel}`;
-      chain = outLabel;
-      return step;
-    }).join(";");
+    const still = (f: string) => ["-loop", "1", "-framerate", String(FPS), "-t", total.toFixed(3), "-i", f];
+    const inputs = ["-i", edited, "-i", term, ...still(bars.base), ...bars.captions.flatMap(still), ...still(bars.badge)];
+    const capBase = 3;
+    const badgeIn = capBase + bars.captions.length;
+    const steps = [`[2:v]format=yuv420p[b0]`];
+    let barLabel = "[b0]";
+    windows.forEach(([a, e], i) => {
+      const next = `[b${i + 1}]`;
+      steps.push(`${barLabel}[${capBase + i}:v]overlay=0:0:shortest=1:enable='between(t,${a.toFixed(3)},${e.toFixed(3)})'${next}`);
+      barLabel = next;
+    });
+    if (badge) {
+      steps.push(`${barLabel}[${badgeIn}:v]overlay=0:0:shortest=1:enable='between(t,${badge[0].toFixed(3)},${badge[1].toFixed(3)})'[bb]`);
+      barLabel = "[bb]";
+    }
+    steps.push(`[0:v][1:v]hstack=inputs=2[main]`, `${barLabel}[main]vstack=inputs=2,format=yuv420p[v]`);
+    const capGraph = steps.join(";");
     for (const crf of [22, 26, 30]) {
-      ffmpeg(["-i", edited, ...capInputs, "-filter_complex", capGraph, "-map", "[v]", "-c:v", "libx264", "-preset", "slow", "-crf", String(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]);
+      ffmpeg([...inputs, "-filter_complex", capGraph, "-map", "[v]", "-t", total.toFixed(3), "-c:v", "libx264", "-preset", "slow", "-crf", String(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]);
       if (mb(mp4) <= 20) break;
     }
 
     const gif = path.join(OUT, "anynotate-demo.gif");
-    for (const [fps, width] of [[14, 960], [12, 960], [10, 880], [10, 800]] as const) {
+    let gifShape = "";
+    for (const [fps, width] of [[12, 1280], [10, 1280], [12, 1120], [10, 1120], [10, 1024], [8, 960]] as const) {
       ffmpeg(["-i", mp4, "-vf", `fps=${fps},scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle`, "-loop", "0", gif]);
-      if (mb(gif) <= 15) {
-        console.log(`gif: ${fps} fps, ${width} wide`);
-        break;
-      }
+      gifShape = `${fps} fps, ${width} wide`;
+      if (mb(gif) <= 15) break;
     }
 
     console.log(JSON.stringify({
       mp4: { path: mp4, mb: +mb(mp4).toFixed(2), seconds: +duration(mp4).toFixed(2) },
-      gif: { path: gif, mb: +mb(gif).toFixed(2) },
+      gif: { path: gif, mb: +mb(gif).toFixed(2), shape: gifShape },
       log: logFile,
-      agent: { seconds: +agent.seconds.toFixed(1), turns: agent.turns, text: agent.text },
-      segments: segs.map(([a, b2]) => [+a.toFixed(2), +b2.toFixed(2)]),
-      captions: windows.map(([a, b2]) => [+a.toFixed(2), +b2.toFixed(2)]),
+      agent: { seconds: +agent.seconds.toFixed(1), turns: agent.turns, speed: +speed.toFixed(2), events: agent.events.length, text: agent.text },
+      segments: segs.map(({ a, b: e, speed: s }) => [+a.toFixed(2), +e.toFixed(2), +s.toFixed(2)]),
+      captions: windows.map(([a, e]) => [+a.toFixed(2), +e.toFixed(2)]),
+      sendAt: +o("sendClick").toFixed(2),
+      fileChanges: changes.map((c) => +mapTime(c + shift, segs).toFixed(2)),
     }, null, 2));
     succeeded = true;
   } finally {
